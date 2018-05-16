@@ -21,6 +21,8 @@ task projectDependencyGraph {
     def jsProjects = []
     def androidProjects = []
     def javaProjects = []
+    def javaUsage = new LinkedHashMap<Project, Long>()
+    def kotlinUsage = new LinkedHashMap<Project, Long>()
 
     queue = [rootProject]
     while (!queue.isEmpty()) {
@@ -40,11 +42,25 @@ task projectDependencyGraph {
         javaProjects.add(project)
       }
 
+      def folders = [new File(project.projectDir, "src")]
+      while (!folders.isEmpty()) {
+        def folder = folders.remove(0)
+        for (file in folder.listFiles()) {
+          if (file.isDirectory()) {
+            folders.add(file)
+          } else if (file.name.endsWith(".kt")) {
+            kotlinUsage.put(project, kotlinUsage.getOrDefault(project, 0) + 1)
+          } else if (file.name.endsWith(".java")) {
+            javaUsage.put(project, javaUsage.getOrDefault(project, 0) + 1)
+          }
+        }
+      }
+
       project.configurations.all { config ->
         config.dependencies
-                .withType(ProjectDependency)
-                .collect { it.dependencyProject }
-                .each { dependency ->
+            .withType(ProjectDependency)
+            .collect { it.dependencyProject }
+            .each { dependency ->
           projects.add(project)
           projects.add(dependency)
           rootProjects.remove(dependency)
@@ -61,23 +77,61 @@ task projectDependencyGraph {
     }
 
     dot << '\n'
+
+    def javaProjectKotlinColor = "#ffb3ba"
+    def javaProjectJavaColor = "#C0868C"
+    def androidProjectKotlinColor = "#baffc9"
+    def androidProjectJavaColor = "#B8CDBE"
+
     for (project in projects) {
       def traits = []
 
       if (rootProjects.contains(project)) {
-        traits.add('shape=box')
+        if (kotlinUsage.getOrDefault(project, 0) > 0 && javaUsage.getOrDefault(project, 0) > 0) {
+          traits.add('style=striped, shape=box')
+        } else {
+          traits.add('shape=box')
+        }
       } else if (commonProjects.contains(project)) {
         traits.add('style=dashed, color=black')
+      } else if (kotlinUsage.getOrDefault(project, 0) > 0 && javaUsage.getOrDefault(project, 0) > 0) {
+        traits.add('style=wedged, shape=ellipse')
       }
 
-      if (jsProjects.contains(project)) {
-        traits.add('fillcolor="#ffffba"')
-      } else if (androidProjects.contains(project)) {
-        traits.add('fillcolor="#baffc9"')
-      } else if (javaProjects.contains(project)) {
-        traits.add('fillcolor="#ffb3ba"')
+      if (kotlinUsage.getOrDefault(project, 0) > 0 && javaUsage.getOrDefault(project, 0) > 0) {
+        def javaFiles = javaUsage.get(project)
+        def kotlinFiles = kotlinUsage.get(project)
+        def kotlinPercent = kotlinFiles/(kotlinFiles + javaFiles)
+        def javaPercent = javaFiles/(kotlinFiles + javaFiles)
+        if (javaPercent < 0.05) {
+          javaPercent = 0.05
+          kotlinPercent = 0.95
+        }
+        if (androidProjects.contains(project)) {
+          traits.add("fillcolor=\"${androidProjectKotlinColor};${kotlinPercent}:${androidProjectJavaColor};${javaPercent}\"")
+        } else if (javaProjects.contains(project)) {
+          traits.add("fillcolor=\"${javaProjectKotlinColor};${kotlinPercent}:${javaProjectJavaColor};${javaPercent}\"")
+        } else {
+          traits.add("fillcolor=purple;1.0")
+        }
       } else {
-        traits.add('fillcolor="#eeeeee"')
+        if (jsProjects.contains(project)) {
+          traits.add('fillcolor="#ffffba"')
+        } else if (androidProjects.contains(project)) {
+          if (javaUsage.getOrDefault(project, 0) > 0) {
+            traits.add("fillcolor=\"${androidProjectJavaColor}\"")
+          } else {
+            traits.add("fillcolor=\"${androidProjectKotlinColor}\"")
+          }
+        } else if (javaProjects.contains(project)) {
+          if (javaUsage.getOrDefault(project, 0) > 0) {
+            traits.add("fillcolor=\"${javaProjectJavaColor}\"")
+          } else {
+            traits.add("fillcolor=\"${javaProjectKotlinColor}\"")
+          }
+        } else {
+          traits.add('fillcolor="#eeeeee"')
+        }
       }
 
       dot << "  \"${project.path}\" [${traits.join(", ")}];\n"
